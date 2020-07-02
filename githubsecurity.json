@@ -1,0 +1,6 @@
+{
+ "TwoFactorAuthEnabled": true,
+ "NumberPrivateRepos": 1,
+ "NumberPublicRepos": 1,
+ "Webhooks": null
+}
