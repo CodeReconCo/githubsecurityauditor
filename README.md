@@ -16,7 +16,8 @@ In order to run all of the scans the token must have the following permissions.
 ![Github token permissions](github_token_permissions.png)
 
 ### Full Usage
-```A tool to collect and highlight potential security issues with a GitHub org. It looks
+```
+A tool to collect and highlight potential security issues with a GitHub org. It looks
 	at things like:
 	* Webhooks
 	* User configuration
@@ -32,4 +33,5 @@ Flags:
       --organization string   The organization we want to check the security on
       --output string         The file that should have the output recorded to (default "githubsecurity.json")
       --scmUrl string         The API URL for the source control management software you want to check
-      --tokenName string      The environment variable name we should retrieve the token for API authentication (default "GIT_TOKEN")```
+      --tokenName string      The environment variable name we should retrieve the token for API authentication (default "GIT_TOKEN")
+```
