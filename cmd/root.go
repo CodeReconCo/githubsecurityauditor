@@ -25,7 +25,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/google/go-github/v31/github"
+	"github.com/google/go-github/v32/github"
 	homedir "github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -36,17 +36,48 @@ import (
 )
 
 type ScannerResults struct {
-	TwoFactorAuthEnabled bool
-	NumberPrivateRepos   int
-	NumberPublicRepos    int
-	Webhooks             []Webhook
-	// ThirdPartyApps - ListInstallations
-	// ActionPermisions
+	TwoFactorAuthEnabled     bool
+	NumberPrivateRepos       int
+	NumberPublicRepos        int
+	Webhooks                 []Webhook
+	ApplicationInstallations []Install
+	ActionRunners            []Runner
+	Repositories             []RepositoryInformation
+}
+
+type RepositoryInformation struct {
+	Name                       string
+	URL                        string
+	IsPrivate                  bool
+	Webhooks                   []Webhook
+	HasWiki                    bool
+	VulnerabilityAlertsEnabled bool
+	Workflows                  []Workflow
 }
 
 type Webhook struct {
 	URL    string
 	Active bool
+}
+
+type Workflow struct {
+	URL   string
+	State string
+	Name  string
+	Path  string
+}
+
+type Install struct {
+	URL                 string
+	TargetType          string
+	RepositorySelection string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+type Runner struct {
+	Name   string
+	Status string
 }
 
 type GithubScanner struct {
@@ -75,20 +106,64 @@ var rootCmd = &cobra.Command{
 	},
 }
 
-func (gs GithubScanner) RetrieveOrgWebhooks(ctx context.Context, org *string) []Webhook {
-	var webhooks []Webhook
+func (gs GithubScanner) RetrieveRepoWebhooks(ctx context.Context, org, repo string) []Webhook {
+	var hooks []Webhook
 	opt := &github.ListOptions{PerPage: 10}
-	for {
-		hooks, resp, err := gs.client.Organizations.ListHooks(ctx, *org, opt)
 
-		if err != nil {
-			fmt.Println(err)
-			return webhooks
-		}
+	for {
+	request:
+		webhooks, resp, err := gs.client.Repositories.ListHooks(ctx, org, repo, opt)
 
 		if _, ok := err.(*github.RateLimitError); ok {
 			fmt.Println("Hit rate limit, sleeping for sixty minutes")
 			time.Sleep(60 * time.Minute)
+			goto request
+		}
+
+		if err != nil {
+			if resp.StatusCode == 403 {
+				fmt.Println("It appears the token being used doesn't have access to this information")
+			} else {
+				fmt.Println(err)
+			}
+			return hooks
+		}
+
+		for _, hook := range webhooks {
+			wh := Webhook{}
+			wh.URL = hook.Config["url"].(string)
+			wh.Active = *hook.Active
+			hooks = append(hooks, wh)
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
+	}
+	return hooks
+}
+
+func (gs GithubScanner) RetrieveOrgWebhooks(ctx context.Context, org *string) []Webhook {
+	var webhooks []Webhook
+	opt := &github.ListOptions{PerPage: 10}
+	for {
+	request:
+		hooks, resp, err := gs.client.Organizations.ListHooks(ctx, *org, opt)
+
+		if _, ok := err.(*github.RateLimitError); ok {
+			fmt.Println("Hit rate limit, sleeping for sixty minutes")
+			time.Sleep(60 * time.Minute)
+			goto request
+		}
+
+		if err != nil {
+			if resp.StatusCode == 403 {
+				fmt.Println("It appears the token being used doesn't have access to this information")
+			} else {
+				fmt.Println(err)
+			}
+			return webhooks
 		}
 
 		for _, hook := range hooks {
@@ -106,17 +181,187 @@ func (gs GithubScanner) RetrieveOrgWebhooks(ctx context.Context, org *string) []
 	return webhooks
 }
 
+func (gs GithubScanner) RetrieveOrgInstalls(ctx context.Context, org *string) []Install {
+	var orgInstalls []Install
+	opt := &github.ListOptions{PerPage: 10}
+
+	for {
+	request:
+		installs, resp, err := gs.client.Organizations.ListInstallations(ctx, *org, opt)
+
+		if _, ok := err.(*github.RateLimitError); ok {
+			fmt.Println("Hit rate limit, sleeping for sixty minutes")
+			time.Sleep(60 * time.Minute)
+			goto request
+		}
+
+		if err != nil {
+			if resp.StatusCode == 403 {
+				fmt.Println("It appears the token being used doesn't have access to this information")
+			} else {
+				fmt.Println(err)
+			}
+			return orgInstalls
+		}
+
+		for _, install := range installs.Installations {
+			in := Install{}
+			in.URL = *install.HTMLURL
+			in.TargetType = *install.TargetType
+			in.RepositorySelection = *install.RepositorySelection
+			in.CreatedAt = install.CreatedAt.Time
+			in.UpdatedAt = install.UpdatedAt.Time
+			orgInstalls = append(orgInstalls, in)
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
+	}
+	return orgInstalls
+}
+
+func (gs GithubScanner) RetrieveRepoWorkflows(ctx context.Context, org, repo string) []Workflow {
+	var repoWorkflows []Workflow
+	opt := &github.ListOptions{PerPage: 10}
+	for {
+	request:
+		workflows, resp, err := gs.client.Actions.ListWorkflows(ctx, org, repo, opt)
+
+		if _, ok := err.(*github.RateLimitError); ok {
+			fmt.Println("Hit rate limit, sleeping for sixty minutes")
+			time.Sleep(60 * time.Minute)
+			goto request
+		}
+
+		if err != nil {
+			if resp.StatusCode == 403 {
+				fmt.Println("It appears the token being used doesn't have access to this information")
+			} else {
+				fmt.Println(err)
+			}
+			return repoWorkflows
+		}
+
+		for _, workflow := range workflows.Workflows {
+			w := Workflow{}
+			w.Name = *workflow.Name
+			w.URL = *workflow.URL
+			w.Path = *workflow.Path
+			w.State = *workflow.State
+
+			repoWorkflows = append(repoWorkflows, w)
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
+	}
+	return repoWorkflows
+}
+
+func (gs GithubScanner) RetrieveOrgActionRunners(ctx context.Context, org *string) []Runner {
+	var orgRunners []Runner
+	opt := &github.ListOptions{PerPage: 10}
+
+	for {
+	request:
+		runners, resp, err := gs.client.Actions.ListOrganizationRunners(ctx, *org, opt)
+
+		if _, ok := err.(*github.RateLimitError); ok {
+			fmt.Println("Hit rate limit, sleeping for sixty minutes")
+			time.Sleep(60 * time.Minute)
+			goto request
+		}
+
+		if err != nil {
+			if resp.StatusCode == 403 {
+				fmt.Println("It appears the token being used doesn't have access to this information")
+			} else {
+				fmt.Println(err)
+			}
+			return orgRunners
+		}
+
+		for _, runner := range runners.Runners {
+			r := Runner{}
+			r.Name = *runner.Name
+			r.Status = *runner.Status
+			orgRunners = append(orgRunners, r)
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
+	}
+	return orgRunners
+}
+
+func (gs GithubScanner) RetrieveRepositoryInformation(ctx context.Context, org *string) []RepositoryInformation {
+	var repoInfo []RepositoryInformation
+
+	opt := &github.RepositoryListByOrgOptions{
+		ListOptions: github.ListOptions{PerPage: 10},
+	}
+
+	for {
+	request:
+		repos, resp, err := gs.client.Repositories.ListByOrg(ctx, *org, opt)
+
+		if _, ok := err.(*github.RateLimitError); ok {
+			fmt.Println("Hit rate limit, sleeping for sixty minutes")
+			time.Sleep(60 * time.Minute)
+			goto request
+		}
+
+		if err != nil {
+			fmt.Println(err)
+			return repoInfo
+		}
+
+		for _, repo := range repos {
+			ri := RepositoryInformation{}
+			ri.Name = *repo.Name
+			ri.URL = *repo.HTMLURL
+			ri.IsPrivate = *repo.Private
+			ri.HasWiki = *repo.HasWiki
+			ri.Webhooks = gs.RetrieveRepoWebhooks(ctx, *org, ri.Name)
+			enabled, _, _ := gs.client.Repositories.GetVulnerabilityAlerts(ctx, *org, *repo.Name)
+			ri.VulnerabilityAlertsEnabled = enabled
+			ri.Workflows = gs.RetrieveRepoWorkflows(ctx, *org, ri.Name)
+			repoInfo = append(repoInfo, ri)
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
+	}
+
+	return repoInfo
+}
+
 func (gs GithubScanner) RetrieveOrgSettings(ctx context.Context, org *string, results ScannerResults) ScannerResults {
-	orgInfo, _, err := gs.client.Organizations.Get(ctx, *org)
+	orgInfo, resp, err := gs.client.Organizations.Get(ctx, *org)
 
 	if err != nil {
-		fmt.Println(err)
+		if resp.StatusCode == 403 {
+			fmt.Println("Unable to retrieve organization information. It appears the token being used doesn't have access to this information.")
+		} else {
+			fmt.Println(err)
+		}
 		return results
 	}
 	results.TwoFactorAuthEnabled = *orgInfo.TwoFactorRequirementEnabled
 	results.NumberPublicRepos = *orgInfo.PublicRepos
 	results.NumberPrivateRepos = *orgInfo.TotalPrivateRepos
 	results.Webhooks = gs.RetrieveOrgWebhooks(ctx, org)
+	results.ApplicationInstallations = gs.RetrieveOrgInstalls(ctx, org)
+	results.ActionRunners = gs.RetrieveOrgActionRunners(ctx, org)
+	results.Repositories = gs.RetrieveRepositoryInformation(ctx, org)
 
 	return results
 }
@@ -145,16 +390,6 @@ func (gs GithubScanner) runScan() {
 		gs.client = github.NewClient(tc)
 	}
 	var results ScannerResults
-
-	// * Org Settings
-	//    * Webhooks
-	//    * 2fa required
-	//    * Third-party applications - policy is not access restricted
-	//    * Action permissions
-	//        * Disable actions for this organization
-	//    * Number of public repos
-	//    * Number of private repos
-	//    TODO: Test with an invalid org and one we don't own
 	results = gs.RetrieveOrgSettings(ctx, &Organization, results)
 
 	output, _ := json.MarshalIndent(results, "", " ")
